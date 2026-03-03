@@ -1,0 +1,345 @@
+# Utility Affordability Index Calculator
+
+**A production-ready tool to identify U.S. utilities where high electricity rates collide with high poverty.**
+
+---
+
+## Quick Start
+
+```bash
+# Install dependencies
+pip3 install pandas openpyxl requests --break-system-packages
+
+# Run with default settings
+python3 affordability_index.v3.py
+
+# Check results
+open outputs/utility_affordability_index_top10.csv
+```
+
+**Expected runtime:** 30-60 seconds
+
+---
+
+## What This Tool Does
+
+Ranks utilities by **Affordability Pressure**, a composite metric that identifies where energy burden hits hardest:
+
+```
+Affordability Pressure = Electricity Rate × Poverty Rate
+```
+
+Where:
+- **Electricity Rate** = Residential Revenue ÷ Residential Sales ($/kWh)
+- **Poverty Rate** = % of population below poverty line in service territory
+
+---
+
+## Required Inputs
+
+### 1. EIA Form 861 - Sales to Ultimate Customers (2024)
+**File:** `Sales_Ult_Cust_2024.xlsx`  
+**Source:** https://www.eia.gov/electricity/data/eia861/  
+**Contains:** Utility revenue and sales data by state and sector
+
+### 2. EIA Form 861 - Service Territory (2024) - Optional
+**File:** `Service_Territory_2024.xlsx`  
+**Source:** https://www.eia.gov/electricity/data/eia861/  
+**Contains:** County-level service area information  
+**Note:** If missing or incomplete, the tool automatically falls back to state-level poverty
+
+### 3. Census ACS Poverty Data - Automatic
+**Source:** Census API (automatic download)  
+**Table:** S1701 - Poverty Status in the Past 12 Months  
+**Coverage:** State and county-level poverty rates  
+**Note:** Script tries 2023, 2022, 2021 automatically
+
+---
+
+## Output Files
+
+### Primary Output
+**File:** `outputs/utility_affordability_index_top10.csv`
+
+**Columns:**
+- `rank` - Ranking (1 = highest affordability pressure)
+- `utility_number` - EIA utility ID
+- `utility_name` - Official utility name
+- `state` - Two-letter state code
+- `electricity_rate_usd_per_kwh` - Residential rate ($/kWh)
+- `poverty_rate_percent` - Poverty rate (%)
+- `affordability_pressure` - Composite metric (rate × poverty)
+- `poverty_source` - Methodology used (county_equal_weight or state)
+- `counties_total` - Counties in service territory (if available)
+- `counties_matched` - Counties matched to poverty data (if available)
+- `coverage_ratio` - Match rate (if available)
+- `residential_revenue_thousand_usd` - Total revenue ($1000s)
+- `residential_sales_mwh` - Total sales (MWh)
+
+**Example output:**
+```csv
+rank,utility_name,state,electricity_rate_usd_per_kwh,poverty_rate_percent,affordability_pressure
+1,Alaska Village Elec Coop Inc,AK,0.6995,10.20,0.071349
+2,Hawaiian Electric Company Inc,HI,0.3890,9.30,0.036177
+3,Island Energy Services,HI,0.3850,9.30,0.035805
+...
+```
+
+---
+
+## Command-Line Options
+
+### Basic Usage
+```bash
+python3 affordability_index.v3.py
+```
+
+### Custom Options
+```bash
+# Analyze top 20 utilities instead of top 10
+python3 affordability_index.v3.py --top 20
+
+# Skip county weighting, use state-level only (faster)
+python3 affordability_index.v3.py --no-county
+
+# Custom output directory
+python3 affordability_index.v3.py --output-dir results
+
+# Keep rate outliers (rates outside $0.01-$1.00/kWh)
+python3 affordability_index.v3.py --keep-outliers
+
+# Adjust county coverage threshold (default: 70%)
+python3 affordability_index.v3.py --min-county-coverage 0.80
+
+# Combine options
+python3 affordability_index.v3.py --top 20 --no-county --output-dir final_results
+```
+
+### All Options
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--sales FILE` | EIA sales file path | `Sales_Ult_Cust_2024.xlsx` |
+| `--territory FILE` | EIA territory file path | `Service_Territory_2024.xlsx` |
+| `--output-dir DIR` | Output directory | `outputs` |
+| `--top N` | Number of top utilities | `10` |
+| `--no-county` | Skip county weighting | `False` |
+| `--keep-outliers` | Keep rate outliers | `False` |
+| `--min-county-coverage` | Min county match ratio | `0.70` |
+
+---
+
+## Expected Runtime
+
+**Typical execution:** 30-60 seconds
+
+**Breakdown:**
+- Loading EIA sales data: ~5 seconds
+- Loading territory data: ~2 seconds
+- Census API county data: ~15 seconds
+- Census API state data: ~5 seconds
+- Calculations and output: ~3 seconds
+
+**Factors affecting runtime:**
+- Census API response time (most variable)
+- File sizes
+- Network speed
+
+---
+
+## Methodology
+
+### County-Weighted Approach (Default)
+When Service Territory file is available:
+
+1. **Load territory data** - Map each utility to counties served
+2. **Fetch county poverty rates** - From Census ACS 5-Year estimates
+3. **Match counties** - Join utility territories to poverty data by county name
+4. **Compute equal-weighted average** - Average poverty across all matched counties per utility
+5. **Apply coverage threshold** - Only use county data if ≥70% of counties matched (configurable)
+6. **Fallback to state** - Use state-level poverty for utilities below threshold
+
+**Limitations:**
+- Current Service Territory file lacks customer weights, so counties are weighted equally
+- County matching is name-based (not FIPS), which may miss some counties
+- If ≥70% of counties match, county poverty is used; otherwise falls back to state
+
+### State-Level Approach (Fallback)
+When territory data unavailable or `--no-county` used:
+
+1. **Fetch state poverty rates** - From Census ACS 5-Year estimates
+2. **Join by state** - All utilities in a state get the same poverty rate
+
+**Advantages:**
+- Simpler, faster
+- 100% coverage
+- Accepted methodology for preliminary analysis
+
+**Limitations:**
+- Less precise than county-weighted
+- Masks within-state variation
+
+---
+
+## Troubleshooting
+
+### "Census API Failed"
+**Issue:** Census API unreachable (SSL/network issues)
+
+**Solutions:**
+1. Check internet connection
+2. Try again (API can be temporarily down)
+3. Use `--no-county` to skip county API call
+4. Check Census API status: https://www.census.gov/data/developers/updates.html
+
+### "Could not find territory sheet"
+**Issue:** Service Territory file structure doesn't match expected format
+
+**Impact:** Falls back to state-level poverty (acceptable methodology)
+
+**Solutions:**
+1. Verify you have the correct EIA Schedule 9 file
+2. Run with `--no-county` to explicitly use state-level approach
+3. Check sheet names: Should contain "Counties_States" or "Counties_Territories"
+
+### "Missing columns" error
+**Issue:** EIA file structure has changed
+
+**Solutions:**
+1. Verify you're using the correct EIA-861 files from eia.gov
+2. Check that you're using 2024 data files
+3. Review the column list printed in the error message
+
+---
+
+## System Requirements
+
+### Python Version
+- **Minimum:** Python 3.9
+- **Recommended:** Python 3.10+
+
+### Dependencies
+```
+pandas>=1.3.0
+openpyxl>=3.0.0
+requests>=2.25.0
+```
+
+Install with:
+```bash
+pip3 install pandas openpyxl requests --break-system-packages
+```
+
+---
+
+## Example Console Output
+
+```
+======================================================================
+UTILITY AFFORDABILITY INDEX CALCULATOR (GTM EDITION)
+======================================================================
+
+======================================================================
+Loading EIA-861 Sales Data
+======================================================================
+Available sheets: ['States', 'Territories', 'Decoupled']
+✓ Loaded 2,817 rows from 'States'
+✓ Processed 2,816 rows
+
+======================================================================
+Cleaning Sales Data
+======================================================================
+Year 2024: 2,815/2,816 rows
+After filters: 2,342 rows
+
+======================================================================
+Computing Electricity Rates
+======================================================================
+Rate stats: $0.0269 to $0.8280 per kWh
+
+======================================================================
+Fetching County Poverty Data (ACS S1701)
+======================================================================
+Trying Census ACS 2023...
+✓ Loaded 3,222 counties from 2023
+
+======================================================================
+Fetching State Poverty Data (ACS S1701)
+======================================================================
+Trying Census API 2023...
+✓ Loaded 52 states from 2023
+
+======================================================================
+Computing Affordability Pressure
+======================================================================
+✓ Computed affordability pressure for 2,342 utilities
+
+======================================================================
+Saving Output
+======================================================================
+✓ Saved: outputs/utility_affordability_index_top10.csv
+
+======================================================================
+COMPLETE
+======================================================================
+✓ Top 10 utilities identified
+✓ Poverty methodology: county where coverage ok, else state fallback
+
+#1 Utility: Alaska Village Elec Coop Inc (AK)
+Electricity rate: $0.6995 per kWh
+Poverty rate: 10.20%
+Affordability pressure: 0.071349
+```
+
+---
+
+## GTM Applications
+
+This tool creates "Provokes" for sales conversations:
+
+**Template:**
+> "[Utility Name] customers pay [X]% more than the national average ([$rate]/kWh vs [$national_avg]/kWh) while [Y]% of your service territory lives below the poverty line. How are you identifying and supporting these vulnerable customers?"
+
+**Example from #1 result:**
+> "Alaska Village Electric Coop customers pay 211% more than the national average ($0.70/kWh vs $0.22/kWh) while 10.2% of your service territory lives below the poverty line. These remote communities face a perfect storm of energy burden."
+
+---
+
+## Data Sources
+
+### EIA Form 861
+- **Publisher:** U.S. Energy Information Administration
+- **URL:** https://www.eia.gov/electricity/data/eia861/
+- **Update Frequency:** Annual
+
+### Census ACS Table S1701
+- **Publisher:** U.S. Census Bureau
+- **Table:** Poverty Status in the Past 12 Months
+- **Variable:** S1701_C03_001E (Percent below poverty level)
+- **URL:** https://data.census.gov/table/ACSST5Y2023.S1701
+
+---
+
+## Quick Reference
+
+```bash
+# Standard run
+python3 affordability_index.v3.py
+
+# Fast run (state-level only)
+python3 affordability_index.v3.py --no-county
+
+# Top 20 utilities
+python3 affordability_index.v3.py --top 20
+
+# Full customization
+python3 affordability_index.v3.py \
+  --top 20 \
+  --no-county \
+  --output-dir final_results
+```
+
+**Output:** Always in `[output-dir]/utility_affordability_index_top10.csv`
+
+---
+
+**Built for production. Ready to ship. 
